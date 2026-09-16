@@ -3,7 +3,7 @@ name: Android CI
 on:
   push:
     branches: [main]
-    tags: ["v*", "smoke-*"]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -31,11 +31,17 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
 
   # Prova la release minificata su un emulatore vero, con i dati live di Roma Mobilità
-  # (scarica il GTFS da 50 MB: per questo non gira a ogni push). I tag smoke-* servono solo a lanciarla.
+  # (scarica il GTFS da 50 MB: per questo gira solo sui tag e con l'avvio manuale).
+  # L'APK provato qui è lo stesso che il job release pubblica.
   emulator:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      signed: ${{ steps.sign.outputs.signed }}
+    env:
+      # Impronta del certificato di firma delle release: un APK firmato con un'altra chiave non si aggiorna.
+      RELEASE_CERT_SHA256: 9e665dffc53d729df62e33fe74d60923fd757247236bae1b8411e89e1bc02eca
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
@@ -44,12 +50,35 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
 
-      - name: Release firmata con una chiave usa e getta
+      # Con i secret RELEASE_* firma con la chiave delle release, altrimenti con una chiave usa e getta.
+      - name: Release firmata
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          keytool -genkeypair -keystore "$RUNNER_TEMP/smoke.jks" -alias smoke -keyalg RSA -validity 1 \
-            -storepass smokepass -keypass smokepass -dname "CN=smoke"
-          KEYSTORE_FILE="$RUNNER_TEMP/smoke.jks" KEYSTORE_PASSWORD=smokepass KEY_ALIAS=smoke KEY_PASSWORD=smokepass \
-            ./gradlew assembleRelease
+          export KEYSTORE_FILE="$RUNNER_TEMP/key.jks"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$KEYSTORE_FILE"
+            export KEYSTORE_PASSWORD="$RELEASE_KEYSTORE_PASSWORD" KEY_ALIAS="$RELEASE_KEY_ALIAS" KEY_PASSWORD="$RELEASE_KEY_PASSWORD"
+          else
+            echo "::warning::Secret di firma assenti: APK firmato con una chiave usa e getta, non verrà pubblicato"
+            export KEYSTORE_PASSWORD=smokepass KEY_ALIAS=smoke KEY_PASSWORD=smokepass
+            keytool -genkeypair -keystore "$KEYSTORE_FILE" -alias smoke -keyalg RSA -validity 1 \
+              -storepass smokepass -keypass smokepass -dname "CN=smoke"
+          fi
+          ./gradlew assembleRelease
+          rm -f "$KEYSTORE_FILE"
+          APK=app/build/outputs/apk/release/app-release.apk
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          CERT=$("$APKSIGNER" verify --print-certs "$APK" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
+          echo "Certificato: $CERT"
+          if [ -n "$KEYSTORE_B64" ]; then
+            [ "$CERT" = "$RELEASE_CERT_SHA256" ] || { echo "::error::L'APK non è firmato con la chiave delle release"; exit 1; }
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Abilita KVM
         run: |
@@ -71,6 +100,12 @@ jobs:
           name: emulator-screenshots
           path: shots/
 
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.sign.outputs.signed == 'true'
+        with:
+          name: app-release
+          path: app/build/outputs/apk/release/app-release.apk
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [build, emulator]
@@ -78,37 +113,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - name: Secret di firma
+        if: needs.emulator.outputs.signed != 'true'
+        run: echo "::warning::Secret di firma assenti, nessuna release pubblicata"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.emulator.outputs.signed == 'true'
         with:
-          distribution: temurin
-          java-version: "21"
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+          name: app-release
 
-      # Richiede i secret RELEASE_KEYSTORE_BASE64, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD.
-      - name: Release firmata
-        id: sign
-        env:
-          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
-        run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::warning::Secret di firma assenti: nessun APK pubblicato da questo workflow"
-            exit 0
-          fi
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          KEYSTORE_FILE="$RUNNER_TEMP/release.jks" ./gradlew assembleRelease
-          rm -f "$RUNNER_TEMP/release.jks"
-          mv app/build/outputs/apk/release/app-release.apk "rome_rtgtfs-${GITHUB_REF_NAME}.apk"
-          echo "signed=true" >> "$GITHUB_OUTPUT"
+      - run: mv app-release.apk "rome_rtgtfs-${GITHUB_REF_NAME}.apk"
+        if: needs.emulator.outputs.signed == 'true'
 
+      # Un tag con il trattino (es. v0.2.0-rc.1) diventa una pre-release.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        if: steps.sign.outputs.signed == 'true'
+        if: needs.emulator.outputs.signed == 'true'
         with:
           files: rome_rtgtfs-*.apk
-          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
           body: |
             App Android non ufficiale per i passaggi del trasporto pubblico di Roma in tempo reale.
             Installa `rome_rtgtfs-${{ github.ref_name }}.apk` (Android 8.0 o successivo).

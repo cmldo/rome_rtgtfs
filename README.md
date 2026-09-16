@@ -59,8 +59,12 @@ E2E=1 ./gradlew testDebugUnitTest --tests '*EndToEnd*'
 ## GitHub Actions
 
 - A ogni push e pull request: test, lint e APK di debug, scaricabile dagli artifact del workflow.
-- Avvio manuale (`workflow_dispatch`) e tag `v*`: la release minificata viene provata su un emulatore Android con i dati live; gli screenshot restano negli artifact.
-- Tag `v*`: pubblicazione di una GitHub Release con l'APK firmato. Servono i secret `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS` e `RELEASE_KEY_PASSWORD`.
+- Avvio manuale (`workflow_dispatch`) e tag `v*`: la release minificata e firmata viene provata su un emulatore Android con i dati live; gli screenshot restano negli artifact.
+- Tag `v*`: lo stesso APK provato sull'emulatore viene pubblicato in una GitHub Release. Un tag con il trattino, per esempio `v0.2.0-rc.1`, crea una pre-release.
+
+Prima di creare il tag vanno aumentati `versionCode` e `versionName` in `app/build.gradle.kts`.
+
+La firma usa i secret `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS` e `RELEASE_KEY_PASSWORD`. Il workflow controlla che l'impronta del certificato sia quella attesa: un APK firmato con un'altra chiave non potrebbe aggiornare l'app già installata, quindi non viene pubblicato. Senza secret la prova su emulatore usa una chiave usa e getta e non viene pubblicato nulla.
 
 ## Licenza
 
