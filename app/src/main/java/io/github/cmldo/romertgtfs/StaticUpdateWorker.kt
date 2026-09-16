@@ -20,6 +20,8 @@ import java.security.MessageDigest
 /**
  * Scarica e importa il GTFS statico solo se l'md5 pubblicato è diverso da quello già importato.
  * Il DB in uso resta disponibile durante l'import: quello nuovo lo sostituisce solo a lavoro finito.
+ * ponytail: niente foreground service. WorkManager ferma i lavori dopo 10 minuti e questo riparte da capo;
+ * se succede su telefoni lenti, aggiungere setForeground con una notifica.
  */
 class StaticUpdateWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
 

@@ -291,11 +291,16 @@ fun currentLocation(ctx: Context, callback: (Location?) -> Unit) {
     }
     val provider = candidates.firstOrNull { runCatching { lm.isProviderEnabled(it) }.getOrDefault(false) }
         ?: return callback(null)
-    val recent = lm.getLastKnownLocation(provider)
-    if (recent != null && System.currentTimeMillis() - recent.time < 60_000) return callback(recent)
-    val noCancel: android.os.CancellationSignal? = null
-    LocationManagerCompat.getCurrentLocation(lm, provider, noCancel, ContextCompat.getMainExecutor(ctx)) {
-        callback(it ?: recent)
+    // Con la sola posizione approssimativa il GPS lancia SecurityException.
+    try {
+        val recent = lm.getLastKnownLocation(provider)
+        if (recent != null && System.currentTimeMillis() - recent.time < 60_000) return callback(recent)
+        val noCancel: android.os.CancellationSignal? = null
+        LocationManagerCompat.getCurrentLocation(lm, provider, noCancel, ContextCompat.getMainExecutor(ctx)) {
+            callback(it ?: recent)
+        }
+    } catch (e: SecurityException) {
+        callback(null)
     }
 }
 
