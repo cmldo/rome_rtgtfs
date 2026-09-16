@@ -20,7 +20,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v4
       - uses: gradle/actions/setup-gradle@v6
 
       - name: Test, lint e build
@@ -43,7 +42,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v4
       - uses: gradle/actions/setup-gradle@v6
 
       - name: Release firmata con una chiave usa e getta
@@ -85,22 +83,35 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - uses: android-actions/setup-android@v4
       - uses: gradle/actions/setup-gradle@v6
 
       # Richiede i secret RELEASE_KEYSTORE_BASE64, RELEASE_KEYSTORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD.
       - name: Release firmata
+        id: sign
         env:
           KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          test -n "$KEYSTORE_B64" || { echo "::error::Secret di firma mancanti"; exit 1; }
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::Secret di firma assenti: nessun APK pubblicato da questo workflow"
+            exit 0
+          fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
           KEYSTORE_FILE="$RUNNER_TEMP/release.jks" ./gradlew assembleRelease
           mv app/build/outputs/apk/release/app-release.apk "rome_rtgtfs-${GITHUB_REF_NAME}.apk"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
 
       - uses: softprops/action-gh-release@v3
+        if: steps.sign.outputs.signed == 'true'
         with:
           files: rome_rtgtfs-*.apk
+          generate_release_notes: true
+          body: |
+            App Android non ufficiale per i passaggi del trasporto pubblico di Roma in tempo reale.
+            Installa `rome_rtgtfs-${{ github.ref_name }}.apk` (Android 8.0 o successivo).
+            Al primo avvio l'app scarica gli orari (circa 50 MB) e li elabora: può servire qualche minuto.
+
+            Dati: Roma Servizi per la Mobilità, Roma Capitale, licenza CC BY-SA.
+            I dati sono forniti esclusivamente a titolo di supporto al viaggio.
